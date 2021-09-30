@@ -32,13 +32,12 @@ def comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, train_
     plt.plot(range(start, len(ts)), ts[start:], label='Actual time series')
     plt.plot(range(train_len, len(ts)), old_predicted, label='Forecast before tuning')
     plt.plot(range(train_len, len(ts)), new_predicted, label='Forecast after tuning')
-    # plt.plot(np.arange(train_len, train_len + len(old_predicted)), old_predicted, label='Forecast before tuning')
-    # plt.plot(np.arange(train_len, train_len + len(new_predicted)), new_predicted, label='Forecast after tuning')
     plt.ylabel(col_name)
     plt.xlabel("N")
     plt.legend()
     plt.grid()
     plt.show()
+
 
 def run_experiment_with_tuning(time_series, col_name, with_ar_pipeline=False, len_forecast=250, cv_folds=None):
     # with_ar_pipeline: is it needed to use pipeline with AR model or not
@@ -164,10 +163,13 @@ print(len(temp_df), "новых значений добавлено")
 
 data = data.append(temp_df).sort_values(by=['Depth'])
 data.reset_index(inplace=True)
+data = data.drop(columns=["index"])
 print(data)
 
+data = data.set_index('Depth')
 data = data.interpolate(method='index')
-plot_series(data[:100])
+data.reset_index(level=0, inplace=True)
+print(data)
 
 # после интерполяции удаляем "лишние" старые значения, чтобы остался ряд с шагом .15
 inx_list = []
@@ -176,14 +178,13 @@ for i in range(1, len(data.Depth)):
         inx_list.append(i)
 
 data = data.drop(index=inx_list)
-data = data.drop(columns=["index"])
 
 plot_series(data[:100])
 
 print(data)
 print(data[:25])
 
-# data.to_csv('kaggle/well_log_interpolated.csv', index=False)
+data.to_csv('kaggle/well_log_interpolated.csv', index=False)
 
 print(list(data.columns))
 # Запуск.
