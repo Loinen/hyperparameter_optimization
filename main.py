@@ -39,7 +39,18 @@ def comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, train_
     plt.show()
 
 
-def run_experiment_with_tuning(time_series, col_name, with_ar_pipeline=False, len_forecast=250, cv_folds=None):
+def prepare_input_data(features_train_data, target_train_data, features_test_data, target_test, len_forecast, task):
+    train_input = InputData(idx=np.arange(0, len(features_train_data)), features=features_train_data,
+                            target=target_train_data, task=task, data_type=DataTypesEnum.ts)
+    start_forecast = len(features_train_data)
+    end_forecast = start_forecast + len_forecast
+    predict_input = InputData(idx=np.arange(start_forecast, end_forecast), features=features_test_data,
+                              target=target_test, task=task, data_type=DataTypesEnum.ts)
+
+    return train_input, predict_input
+
+
+def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds=None):
     # with_ar_pipeline: is it needed to use pipeline with AR model or not
     task = Task(TaskTypesEnum.ts_forecasting, TsForecastingParams(len_forecast))
 
@@ -51,35 +62,26 @@ def run_experiment_with_tuning(time_series, col_name, with_ar_pipeline=False, le
     exog_train = exog_arr[:-len_forecast]
     exog_test = exog_arr[-len_forecast:]
     # Data for lagged transformation
-    train_lagged = InputData(idx=np.arange(0, len(train_data)), features=train_data, target=train_data,
-                             task=task, data_type=DataTypesEnum.ts)
-    start_forecast = len(train_data)
-    end_forecast = start_forecast + len_forecast
-    predict_lagged = InputData(idx=np.arange(start_forecast, end_forecast), features=train_data, target=test_data,
-                               task=task, data_type=DataTypesEnum.ts)
-
+    train_lagged, predict_lagged = prepare_input_data(train_data, train_data, train_data, test_data, len_forecast, task)
     # Data for exog operation
-    train_exog = InputData(idx=np.arange(0, len(exog_train)), features=exog_train, target=train_data, task=task,
-                           data_type=DataTypesEnum.ts)
-    start_forecast = len(exog_train)
-    end_forecast = start_forecast + len_forecast
-    predict_exog = InputData(idx=np.arange(start_forecast, end_forecast), features=exog_test, target=test_data,
-                             task=task, data_type=DataTypesEnum.ts)
+    train_exog, predict_exog = prepare_input_data(exog_train, train_data, exog_test, test_data, len_forecast, task)
 
     train_dataset = MultiModalData({'lagged': train_lagged, 'exog_ts_data_source': train_exog})
-
     predict_dataset = MultiModalData({'lagged': predict_lagged, 'exog_ts_data_source': predict_exog})
 
-    # Get graph with several models and with arima pipeline
-    if with_ar_pipeline:
-        node_ar = PrimaryNode('ar')
-        pipeline = Pipeline(node_ar)
-    else:
-        pipeline = get_complex_pipeline()
+    pipeline = get_complex_pipeline()
 
-    old_predicted, new_predicted = make_forecast_with_tuning(pipeline, train_dataset, predict_dataset, task, cv_folds)
+    start_time = timeit.default_timer()
+    pipeline.fit(train_dataset)
+    amount_of_seconds = timeit.default_timer() - start_time
+    print(f'\nIt takes {amount_of_seconds:.2f} seconds to train pipeline\n')
 
+    predicted_values = pipeline.predict(predict_dataset)
+    old_predicted = predicted_values.predict
     old_predicted = np.ravel(np.array(old_predicted))
+
+    pipeline = get_complex_pipeline()
+    new_predicted = make_forecast_with_tuning(pipeline, train_dataset, predict_dataset, task, cv_folds)
     new_predicted = np.ravel(np.array(new_predicted))
     test_data = np.ravel(test_data)
 
@@ -93,33 +95,21 @@ def run_experiment_with_tuning(time_series, col_name, with_ar_pipeline=False, le
     print(f'RMSE after tuning - {mse_after:.4f}')
     print(f'MAE after tuning - {mae_after:.4f}\n')
 
-    comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, len(train_data), start=0)
-
     start_point = len(time_series) - len_forecast * 2
+    comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, len(train_data), start=0)
     comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, len(train_data), start_point)
 
 
-def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_folds):
-    # Fit it
-    start_time = timeit.default_timer()
-    pipeline.fit(train_input)
-    amount_of_seconds = timeit.default_timer() - start_time
-
-    print(f'\nIt takes {amount_of_seconds:.2f} seconds to train pipeline\n')
-
-    # Predict
-    predicted_values = pipeline.predict(predict_input)
-    old_predicted_values = predicted_values.predict
-
-    pipeline_tuner = PipelineTuner(pipeline, task, iterations=15)
-    pipeline = pipeline_tuner.tune_pipeline(input_data=train_input, loss_function=mean_squared_error,
-                                            loss_params={'squared': False}, cv_folds=cv_folds, validation_blocks=3)
-    # Fit pipeline on the entire train data and get prediction
-    # pipeline.fit(train_input)
-    # predicted_values = pipeline.predict(predict_input)
+def make_forecast_with_tuning(orig_pipeline, train_input, predict_input, task, cv_folds):
+    pipeline_tuner = PipelineTuner(orig_pipeline, task, iterations=15)
+    tuned_pipeline = pipeline_tuner.tune_pipeline(input_data=train_input, loss_function=mean_squared_error,
+                                                  loss_params={'squared': False}, cv_folds=cv_folds,
+                                                  validation_blocks=3)
+    tuned_pipeline.fit(train_input)
+    predicted_values = tuned_pipeline.predict(predict_input)
     new_predicted_values = predicted_values.predict
 
-    return old_predicted_values, new_predicted_values
+    return new_predicted_values
 
 
 def get_complex_pipeline():
@@ -130,64 +120,58 @@ def get_complex_pipeline():
     return pipeline
 
 
-data = pd.read_excel("kaggle/well_log.xlsx", sheet_name=0)
-# убираем лишние столбцы
-data.drop(columns=['SXO', 'Dtsyn', 'Vpsyn', 'sw new', 'sw new%', 'PHI2', 'ΔVp (m/s)'], inplace=True)
-print(data)
+def interpolate(df):
+    temp_df = pd.DataFrame()
+    count_columns = len(list(df.columns))
+    new_str = np.zeros(count_columns)  # создаем вектор для новых значений
+    new_str[:] = np.nan  # заполняем его nan
+    depth = df.Depth[0]  # устанавливаем первое значение глубины в качестве начального
+    depths_list = []  # создаем список "правильных" глубин для дальнейшего удаления остальных из датафрейма
 
-plot_series(data)
-plot_series(data[:100])
+    # обходим массив и создаем недостающие значения глубины (остальные - NaN)
+    while depth <= df.Depth.values[-1]:
+        depth = np.round(depth + 0.15, 2)
+        depths_list.append(depth)
+        if depth not in df.Depth.values:
+            new_str[0] = depth  # добавляем новое значение для глубины, вставляем в наш временный датафрейм
+            str_to_pandas = pd.DataFrame([new_str], columns=list(df.columns))
+            temp_df = temp_df.append(str_to_pandas)
 
-# рисуем корреляционную матрицу
-corr = data.corr()
-sns.heatmap(corr, annot=True, fmt='.1f', cmap='Blues')
-plt.show()
+    print(len(temp_df), "новых значений добавлено")
 
-# обходим массив и создаем недостающие значения глубины (остальные - NaN)
-temp_df = pd.DataFrame()
-count_columns = len(list(data.columns))
-new_str = np.zeros(count_columns)
-new_str[:] = np.nan
-depth = data.Depth[0]
-depths_list = []
+    df = df.append(temp_df).sort_values(by=['Depth'])
+    df = df.set_index('Depth')
+    df = df.interpolate(method='index')
+    df.reset_index(level=0, inplace=True)
 
-while depth <= data.Depth.values[-1]:
-    depth = np.round(depth + 0.15, 2)
-    depths_list.append(depth)
-    if depth not in data.Depth.values:
-        new_str[0] = depth  # добавляем новое значение для глубины
-        str_to_pandas = pd.DataFrame([new_str], columns=list(data.columns))
-        temp_df = temp_df.append(str_to_pandas)
+    # после интерполяции удаляем "лишние" старые значения, чтобы остался ряд с шагом .15
+    inx_list = []  # составим список индексов для дальнейшего удаления
+    for i in range(1, len(df.Depth)):
+        if df.Depth[i] not in depths_list:
+            inx_list.append(i)
 
-print(len(temp_df), "новых значений добавлено")
+    df = df.drop(index=inx_list)
+    plot_series(df[:100])
+    # df.to_csv('kaggle/well_log_interpolated.csv', index=False)
 
-data = data.append(temp_df).sort_values(by=['Depth'])
-data.reset_index(inplace=True)
-data = data.drop(columns=["index"])
-print(data)
+    return df
 
-data = data.set_index('Depth')
-data = data.interpolate(method='index')
-data.reset_index(level=0, inplace=True)
-print(data)
 
-# после интерполяции удаляем "лишние" старые значения, чтобы остался ряд с шагом .15
-inx_list = []
-for i in range(1, len(data.Depth)):
-    if data.Depth[i] not in depths_list:
-        inx_list.append(i)
+if __name__ == "__main__":
+    data = pd.read_excel("kaggle/well_log.xlsx", sheet_name=0)
+    # убираем лишние столбцы
+    data.drop(columns=['SXO', 'Dtsyn', 'Vpsyn', 'sw new', 'sw new%', 'PHI2', 'ΔVp (m/s)'], inplace=True)
+    print(data)
 
-data = data.drop(index=inx_list)
+    plot_series(data)
+    plot_series(data[:100])
 
-plot_series(data[:100])
+    corr = data.corr()  # рисуем корреляционную матрицу
+    sns.heatmap(corr, annot=True, fmt='.1f', cmap='Blues')
+    plt.show()
 
-print(data)
-print(data[:25])
+    data = interpolate(data)
 
-data.to_csv('kaggle/well_log_interpolated.csv', index=False)
-
-print(list(data.columns))
-# Запуск.
-for col in list(data.columns):
-    ts = np.array(data[col])
-    run_experiment_with_tuning(ts, col, with_ar_pipeline=False, len_forecast=500, cv_folds=2)
+    for col in list(data.columns):
+        ts = np.array(data[col])
+        run_experiment_with_tuning(ts, col, len_forecast=500, cv_folds=2)
