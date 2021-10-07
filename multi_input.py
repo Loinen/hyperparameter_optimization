@@ -109,12 +109,12 @@ data = pd.read_excel("kaggle/well_log.xlsx", sheet_name=0)
 data.drop(columns=['SXO', 'Dtsyn', 'Vpsyn', 'sw new', 'sw new%', 'PHI2', 'ΔVp (m/s)'], inplace=True)
 print(data)
 
-plot_series(data)
-plot_series(data[:100])
+#plot_series(data)
+#plot_series(data[:100])
 
 corr = data.corr()  # рисуем корреляционную матрицу
 sns.heatmap(corr, annot=True, fmt='.1f', cmap='Blues')
-plt.show()
+#plt.show()
 
 data = interpolate(data)
 
