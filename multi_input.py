@@ -1,9 +1,13 @@
+from functools import partial
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import warnings
 import timeit
 import seaborn as sns
+from fedot.api.api_utils.data_definition import array_to_input_data
+from fedot.core.data.multi_modal import MultiModalData
 
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
@@ -11,11 +15,12 @@ from fedot.api.main import Fedot
 from fedot.core.pipelines.tuning.unified import PipelineTuner
 from fedot.core.repository.tasks import Task, TaskTypesEnum, TsForecastingParams
 from main import plot_series, interpolate, comparsion_plot
+
 # Игнорирование возникающих предупреждений.
 warnings.filterwarnings('ignore')
 
 
-def run_experiment_with_tuning(time_series, col_name,  len_forecast=250, cv_folds=None):
+def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds=None):
     task = Task(TaskTypesEnum.ts_forecasting, TsForecastingParams(len_forecast))
 
     # мы хотим прогнозировать PHIE (пористость), возьмем параметры с наибольшей корреляцией
@@ -30,7 +35,7 @@ def run_experiment_with_tuning(time_series, col_name,  len_forecast=250, cv_fold
                        'max_arity': 3,
                        'pop_size': 20,
                        'num_of_generations': 100,
-                       'timeout': 1,  # AutoML algorithm will work for 2 minutes
+                       'timeout': 0.01,  # AutoML algorithm will work for 2 minutes
                        'preset': 'ultra_light',
                        'metric': 'rmse',
                        'cv_folds': None,
@@ -57,19 +62,33 @@ def run_experiment_with_tuning(time_series, col_name,  len_forecast=250, cv_fold
     plt.grid()
     plt.show()
 
-    new_predicted = make_forecast_with_tuning(obtained_pipeline, train_dataset, predict_dataset, task, cv_folds)
+    new_predicted = make_forecast_with_tuning(obtained_pipeline, train_dataset, predict_dataset,
+                                              task, cv_folds, ts[:len(ts) - len_forecast], len_forecast)
 
     # start_point = len(time_series) - len_forecast * 2
     # comparsion_plot(obtained_pipeline, col_name, ts, forecast, new_predicted, len_train_data, start=0)
     # comparsion_plot(obtained_pipeline, col_name, ts, forecast, new_predicted, len_train_data, start_point)
 
 
-def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_folds):
+def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_folds, target, len_forecast):
     pipeline_tuner = PipelineTuner(pipeline, task, iterations=15)
-    pipeline = pipeline_tuner.tune_pipeline(input_data=train_input, loss_function=mean_squared_error,
+
+    data_part_transformation_func = partial(array_to_input_data, target_array=target,
+                                            task=Task(TaskTypesEnum.ts_forecasting,
+                                                      TsForecastingParams(forecast_length=len_forecast)))
+    sources = dict((f'data_source_ts/{data_part_key}', data_part_transformation_func(features_array=data_part))
+                   for (data_part_key, data_part) in train_input.items())
+    train_input_data = MultiModalData(sources)
+
+    pipeline = pipeline_tuner.tune_pipeline(input_data=train_input_data, loss_function=mean_squared_error,
                                             loss_params={'squared': False}, cv_folds=cv_folds, validation_blocks=3)
-    pipeline.fit(train_input)
-    predicted_values = pipeline.predict(predict_input)
+    pipeline.fit(train_input_data)
+
+    sources = dict((f'data_source_ts/{data_part_key}', data_part_transformation_func(features_array=data_part))
+                   for (data_part_key, data_part) in predict_input.items())
+    predict_input_data = MultiModalData(sources)
+
+    predicted_values = pipeline.predict(predict_input_data)
     new_predicted_values = predicted_values.predict
 
     return new_predicted_values
@@ -77,7 +96,6 @@ def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_fol
 
 def multi_automl_fit_forecast(train_input: dict, predict_input: dict, composer_params: dict, target: np.array,
                               forecast_length: int, vis=True):
-
     task_params = TsForecastingParams(forecast_length=forecast_length)
     model = Fedot(problem='ts_forecasting', composer_params=composer_params, task_params=task_params, verbose_level=4)
     obtained_pipeline = model.fit(features=train_input, target=target)
@@ -109,12 +127,12 @@ data = pd.read_excel("kaggle/well_log.xlsx", sheet_name=0)
 data.drop(columns=['SXO', 'Dtsyn', 'Vpsyn', 'sw new', 'sw new%', 'PHI2', 'ΔVp (m/s)'], inplace=True)
 print(data)
 
-#plot_series(data)
-#plot_series(data[:100])
+# plot_series(data)
+# plot_series(data[:100])
 
 corr = data.corr()  # рисуем корреляционную матрицу
 sns.heatmap(corr, annot=True, fmt='.1f', cmap='Blues')
-#plt.show()
+# plt.show()
 
 data = interpolate(data)
 
