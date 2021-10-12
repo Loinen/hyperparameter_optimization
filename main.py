@@ -30,8 +30,8 @@ def plot_series(df):
 def comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, train_len, start=0):
     pipeline.print_structure()
     plt.plot(range(start, len(ts)), ts[start:], label='Actual time series')
-    plt.plot(range(train_len, len(ts)), old_predicted, label='Forecast before tuning')
-    plt.plot(range(train_len, len(ts)), new_predicted, label='Forecast after tuning')
+    plt.plot(range(train_len, len(ts)), old_predicted, label='Forecast before tuning', linestyle='--', color='c')
+    plt.plot(range(train_len, len(ts)), new_predicted, label='Forecast after tuning', color='g')
     plt.ylabel(col_name)
     plt.xlabel("N")
     plt.legend()
