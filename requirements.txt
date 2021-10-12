@@ -1,0 +1,2 @@
+https://github.com/nccr-itmo/FEDOT/archive/master.zip
+openpyxl==3.0.9
