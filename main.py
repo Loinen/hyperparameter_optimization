@@ -27,8 +27,7 @@ def plot_series(df):
     plt.show()
 
 
-def comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, train_len, start=0):
-    pipeline.print_structure()
+def comparsion_plot(col_name, ts, old_predicted, new_predicted, train_len, start=0):
     plt.plot(range(start, len(ts)), ts[start:], label='Actual time series')
     plt.plot(range(train_len, len(ts)), old_predicted, label='Forecast before tuning', linestyle='--', color='c')
     plt.plot(range(train_len, len(ts)), new_predicted, label='Forecast after tuning', color='g')
@@ -96,8 +95,8 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     print(f'MAE after tuning - {mae_after:.4f}\n')
 
     start_point = len(time_series) - len_forecast * 2
-    comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, len(train_data), start=0)
-    comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, len(train_data), start_point)
+    comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start=0)
+    comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start_point)
 
 
 def make_forecast_with_tuning(orig_pipeline, train_input, predict_input, task, cv_folds):

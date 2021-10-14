@@ -5,6 +5,7 @@ import pandas as pd
 import warnings
 import timeit
 import seaborn as sns
+import datetime
 
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
@@ -14,7 +15,7 @@ from fedot.core.repository.tasks import Task, TaskTypesEnum, TsForecastingParams
 from fedot.api.api_utils.data_definition import array_to_input_data  # FEDOT ver. 0.4.1
 from fedot.core.data.multi_modal import MultiModalData
 
-from main import plot_series, interpolate, comparsion_plot
+from main import interpolate, comparsion_plot
 
 # Игнорирование возникающих предупреждений.
 warnings.filterwarnings('ignore')
@@ -31,11 +32,12 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     print('predict_dataset', predict_dataset)
 
     # Prepare parameters for algorithm launch
-    composer_params = {'max_depth': 6,  # max depth of the pipeline
+    composer_params = {'max_depth': 8,  # max depth of the pipeline
                        'max_arity': 4,  # max arity of the pipeline nodes
-                       'pop_size': 20,  # population size for composer
-                       'num_of_generations': 100,  # number of generations for composer
-                       'timeout': 2,  # composing time (minutes)
+                       'min_arity': 1,  # min arity of the pipeline nodes
+                       'pop_size': 5,  # population size for composer
+                       'num_of_generations': 10,  # number of generations for composer
+                       'timeout': 0.0005,  # composing time (minutes)
                        # 'available_operations': # list of model names to use
                        'with_tuning': None,  # allow hyperparameters tuning for the model
                        'cv_folds': None,  # number of folds for cross-validation
@@ -67,32 +69,47 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     plt.grid()
     plt.show()
 
-    new_predicted = make_forecast_with_tuning(obtained_pipeline, train_dataset, predict_dataset,
-                                              task, cv_folds, ts[:len(ts) - len_forecast])
+    # new_predicted = make_forecast_with_tuning(obtained_pipeline, train_dataset, predict_dataset,
+    #                                           task, cv_folds, ts[:len(ts) - len_forecast])
+    #
+    # new_predicted = np.ravel(np.array(new_predicted))
+    transformed_train_dataset = transform_data(train_dataset, ts[:len(ts) - len_forecast], task)
+    transformed_predict_dataset = transform_data(predict_dataset, ts[:len(ts) - len_forecast], task)
+
+    tuned_pipeline = obtained_pipeline.fine_tune_all_nodes(input_data=transformed_train_dataset,
+                                                           timeout=1, iterations=50, loss_function=mean_squared_error)
+    tuned_pipeline.fit(transformed_train_dataset)
+    new_predicted = tuned_pipeline.predict(transformed_predict_dataset)
+    new_predicted = np.ravel(np.array(new_predicted.predict))
+    print(new_predicted)
+    print(new_predicted[:10])
+    print(forecast[:10])
 
     start_point = len(time_series) - len_forecast * 2
-    comparsion_plot(obtained_pipeline, col_name, ts, forecast, new_predicted[0], len_train_data, start=0)
-    comparsion_plot(obtained_pipeline, col_name, ts, forecast, new_predicted[0], len_train_data, start_point)
+    comparsion_plot(col_name, ts, forecast, new_predicted, len_train_data, start=0)
+    comparsion_plot(col_name, ts, forecast, new_predicted, len_train_data, start_point)
+
+
+def transform_data(input_data, target_data, task):
+    data_part_transformation_func = partial(array_to_input_data, target_array=target_data, task=task)
+    sources = dict((f'data_source_ts/{data_part_key}', data_part_transformation_func(features_array=data_part))
+                   for (data_part_key, data_part) in input_data.items())
+    return MultiModalData(sources)
 
 
 def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_folds, target):
     print("************************make_forecast_with_tuning************************")
-    data_part_transformation_func = partial(array_to_input_data, target_array=target, task=task)
-    sources = dict((f'data_source_ts/{data_part_key}', data_part_transformation_func(features_array=data_part))
-                   for (data_part_key, data_part) in train_input.items())
-    train_input_data = MultiModalData(sources)
+    train_input_data = transform_data(train_input, target, task)
 
-    pipeline_tuner = PipelineTuner(pipeline, task, iterations=30)
-    new_pipeline = pipeline_tuner.tune_pipeline(input_data=train_input_data, loss_function=mean_squared_error,
-                                            loss_params={'squared': False}, cv_folds=cv_folds, validation_blocks=3)
-    new_pipeline.fit(train_input_data)
-    new_pipeline.show()
+    pipeline_tuner = PipelineTuner(pipeline, task, timeout=datetime.timedelta(minutes=15), iterations=5000)
+    tuned_pipeline = pipeline_tuner.tune_pipeline(input_data=train_input_data, loss_function=mean_squared_error,
+                                                  loss_params={'squared': False}, cv_folds=cv_folds,
+                                                  validation_blocks=3)
+    tuned_pipeline.fit(train_input_data)
+    tuned_pipeline.show()
 
-    sources = dict((f'data_source_ts/{data_part_key}', data_part_transformation_func(features_array=data_part))
-                   for (data_part_key, data_part) in predict_input.items())
-    predict_input_data = MultiModalData(sources)
-
-    predicted_values = new_pipeline.predict(predict_input_data)
+    predict_input_data = transform_data(predict_input, target, task)
+    predicted_values = tuned_pipeline.predict(predict_input_data)
     new_predicted_values = predicted_values.predict
 
     return new_predicted_values
@@ -151,7 +168,7 @@ data.rename(columns=dict_columns, inplace=True)
 print(data)  # let's see
 
 # Запуск
-run_experiment_with_tuning(data, 'PHIE', len_forecast=500, cv_folds=2)
+run_experiment_with_tuning(data, 'PHIE', len_forecast=500, cv_folds=5)
 
 # for col in list(data.columns):
 #     ts = np.array(data[col])

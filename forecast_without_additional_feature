@@ -64,8 +64,8 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     print(f'MAE after tuning - {mae_after:.4f}\n')
 
     start_point = len(time_series) - len_forecast * 2
-    comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, len(train_data), start=0)
-    comparsion_plot(pipeline, col_name, ts, old_predicted, new_predicted, len(train_data), start_point)
+    comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start=0)
+    comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start_point)
 
 
 def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_folds):
