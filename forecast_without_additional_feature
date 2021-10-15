@@ -4,6 +4,7 @@ import pandas as pd
 import warnings
 import timeit
 import seaborn as sns
+import datetime
 
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
@@ -14,7 +15,16 @@ from fedot.core.pipelines.tuning.unified import PipelineTuner
 from fedot.core.repository.dataset_types import DataTypesEnum
 from fedot.core.repository.tasks import Task, TaskTypesEnum, TsForecastingParams
 
-from main import plot_series, interpolate, comparsion_plot
+# Evolutionary algorithm classes
+from fedot.core.optimisers.gp_comp.operators.mutation import MutationTypesEnum
+from fedot.core.composer.gp_composer.specific_operators import parameter_change_mutation
+from fedot.core.composer.gp_composer.gp_composer import GPComposerBuilder, GPComposerRequirements
+from fedot.core.optimisers.gp_comp.operators.inheritance import GeneticSchemeTypesEnum
+from fedot.core.optimisers.gp_comp.gp_optimiser import GPGraphOptimiserParameters
+from fedot.core.repository.quality_metrics_repository import ClassificationMetricsEnum
+from fedot.core.repository.quality_metrics_repository import MetricsRepository, RegressionMetricsEnum
+
+from main import plot_series, interpolate, comparsion_plot, count_errors
 
 # Игнорирование возникающих предупреждений.
 warnings.filterwarnings('ignore')
@@ -45,27 +55,78 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     train_input, predict_input, task = prepare_input_data(len_forecast, train_data_features=train_data,
                                                           train_data_target=train_data,
                                                           test_data_features=train_data)
-    pipeline = get_complex_pipeline()
+    init_pipeline = get_complex_pipeline()
+    init_pipeline.show()
+    print("init pipe")
+    init_pipeline.print_structure()
 
-    old_predicted, new_predicted = make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_folds)
+    old_predicted, new_predicted = make_forecast_with_tuning(init_pipeline, train_input, predict_input, task, cv_folds)
 
     old_predicted = np.ravel(np.array(old_predicted))
     new_predicted = np.ravel(np.array(new_predicted))
     test_data = np.ravel(test_data)
 
-    mse_before = mean_squared_error(test_data, old_predicted, squared=False)
-    mae_before = mean_absolute_error(test_data, old_predicted)
-    print(f'RMSE before tuning - {mse_before:.4f}')
-    print(f'MAE before tuning - {mae_before:.4f}\n')
-
-    mse_after = mean_squared_error(test_data, new_predicted, squared=False)
-    mae_after = mean_absolute_error(test_data, new_predicted)
-    print(f'RMSE after tuning - {mse_after:.4f}')
-    print(f'MAE after tuning - {mae_after:.4f}\n')
+    count_errors(test_data, old_predicted, new_predicted)
 
     start_point = len(time_series) - len_forecast * 2
     comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start=0)
     comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start_point)
+
+    # try to use composer
+    # In FEDOT, there are several mutation operators, namely:
+
+    # simple - this type of mutation is passed over all nodes of the tree started from the root node and replace
+    # operations in the nodes with new ones;
+
+    # growth - this mutation selects a random node in a tree, generates new subtree,
+    # and replaces the selected node's subtree;
+
+    # local_growth - as "growth", but maximal depth of new subtree equals depth of tree located in;
+
+    # reduce - selects a random node in a tree, then removes its subtree. If the current arity of the node's parent
+    # is more than the specified minimal arity, then the selected node is also removed;
+
+    # Specific mutation:
+    # parameter_change_mutation - this type of mutation is passed over all nodes and changes hyperpearameters of the
+    # operations;
+
+    mutation_types = [parameter_change_mutation, MutationTypesEnum.simple, MutationTypesEnum.reduce]
+    optimiser_parameters = GPGraphOptimiserParameters(mutation_types=mutation_types)
+    primary_operations = ['sparse_lagged', 'lagged', 'smoothing', 'scaling',
+                          'gaussian_filter', 'ar', 'poly_features', 'normalization', 'pca']
+    secondary_operations = ['sparse_lagged', 'lagged', 'linear', 'ridge', 'lasso', 'knnreg', 'dtreg', 'linear',
+                            'scaling', 'ransac_lin_reg', 'ransac_non_lin_reg', 'rfe_lin_reg', 'rfe_non_lin_reg']
+
+    composer_requirements = GPComposerRequirements(
+        primary=primary_operations,
+        secondary=secondary_operations,
+        max_arity=4,
+        max_depth=8,
+        pop_size=10,
+        num_of_generations=20,
+        crossover_prob=0.8,
+        mutation_prob=0.8,
+        timeout=datetime.timedelta(minutes=1),
+        cv_folds=2)
+
+    metric_function = MetricsRepository().metric_by_id(RegressionMetricsEnum.MAE)
+    builder = GPComposerBuilder(task=task). \
+        with_optimiser_parameters(optimiser_parameters). \
+        with_requirements(composer_requirements). \
+        with_metrics(metric_function).with_initial_pipeline(init_pipeline)
+    composer = builder.build()
+
+    obtained_pipeline = composer.compose_pipeline(data=train_input, is_visualise=False)
+    obtained_pipeline.fit(train_input)
+    print("composer pipe")
+    obtained_pipeline.print_structure()
+
+    obtained_output = obtained_pipeline.predict(predict_input)
+    obtained_forecast = np.ravel(np.array(obtained_output.predict))
+
+    # Мы будем сравнивать ориг пайплайн с новым, затем можно сравнить результаты composer и PipelineTuner
+    count_errors(test_data, old_predicted, obtained_forecast)
+    comparsion_plot(col_name, ts, old_predicted, obtained_forecast, len(train_data), start_point)
 
 
 def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_folds):
@@ -75,20 +136,18 @@ def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_fol
 
     print(f'\nIt takes {amount_of_seconds:.2f} seconds to train pipeline\n')
 
-    # Predict
+    # Predict orig pipe
     predicted_values = pipeline.predict(predict_input)
     old_predicted_values = predicted_values.predict
 
     pipeline_tuner = PipelineTuner(pipeline, task, iterations=10)
-    pipeline = pipeline_tuner.tune_pipeline(input_data=train_input,
-                                            loss_function=mean_squared_error,
-                                            loss_params={'squared': False},
-                                            cv_folds=cv_folds,
-                                            validation_blocks=3)
+    pipeline = pipeline_tuner.tune_pipeline(input_data=train_input, loss_function=mean_squared_error,
+                                            loss_params={'squared': False}, cv_folds=cv_folds, validation_blocks=3)
 
-    # Fit pipeline on the entire train data
-    pipeline.fit_from_scratch(train_input)
-    # Predict
+    pipeline.fit_from_scratch(train_input)  # Fit pipeline on the entire train data
+    print("PipelineTuner pipe")
+    pipeline.print_structure()
+    # Predict tuned
     predicted_values = pipeline.predict(predict_input)
     new_predicted_values = predicted_values.predict
 
@@ -110,7 +169,9 @@ def get_complex_pipeline():
 
     # Second level
     node_lagged_1 = SecondaryNode('lagged', nodes_from=[node_smoothing])
+    node_lagged_1.custom_params = {'window_size': 0.15}
     node_lagged_2 = PrimaryNode('lagged')
+    node_lagged_2.custom_params = {'window_size': 10}
 
     # Third level
     node_ridge_1 = SecondaryNode('ridge', nodes_from=[node_lagged_1])
@@ -124,9 +185,9 @@ def get_complex_pipeline():
 
 
 if __name__ == "__main__":
-    data = pd.read_excel("kaggle/well_log.xlsx", sheet_name=0)
+    data = pd.read_excel("kaggle/well_log.xlsx", sheet_name=0, nrows=3000)
     # убираем лишние столбцы
-    data.drop(columns=['SXO', 'Dtsyn', 'Vpsyn', 'sw new', 'sw new%', 'PHI2', 'ΔVp (m/s)'], inplace=True)
+    data.drop(columns=['SXO', 'Dtsyn', 'Vpsyn', 'sw new', 'sw new%', 'PHI2', 'ΔVp (m/s)', 'ΔVp'], inplace=True)
     print(data)
 
     plot_series(data)
@@ -137,7 +198,15 @@ if __name__ == "__main__":
     plt.show()
 
     data = interpolate(data)
+    # our columns - ['Depth', 'CALI', 'CGR', 'DT', 'ILD', 'NPHI', 'PEF', 'PHIE',
+    # 'RHOB', 'RT', 'SGR', 'SW', 'Φda', 'ΦN', 'ΦND', 'Vpreal', 'ΔVp']
+    # we need to rename some of them
+    dict_columns = {'Φda': 'FDA',
+                    'ΦN': 'FN',
+                    'ΦND': 'FND',
+                    'Vpreal': 'VP'}
+    data.rename(columns=dict_columns, inplace=True)
 
-    for col in list(data.columns):
+    for col in ['SW']:  # list(data.columns) 'SW', 'CGR', 'NPHI', 'FN', 'PHIE'
         ts = np.array(data[col])
         run_experiment_with_tuning(ts, col, len_forecast=500, cv_folds=2)
