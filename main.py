@@ -38,6 +38,18 @@ def comparsion_plot(col_name, ts, old_predicted, new_predicted, train_len, start
     plt.show()
 
 
+def count_errors(test_data, old_predicted, new_predicted):
+    mse_before = mean_squared_error(test_data, old_predicted, squared=False)
+    mae_before = mean_absolute_error(test_data, old_predicted)
+    print(f'RMSE before tuning - {mse_before:.4f}')
+    print(f'MAE before tuning - {mae_before:.4f}\n')
+
+    mse_after = mean_squared_error(test_data, new_predicted, squared=False)
+    mae_after = mean_absolute_error(test_data, new_predicted)
+    print(f'RMSE after tuning - {mse_after:.4f}')
+    print(f'MAE after tuning - {mae_after:.4f}\n')
+
+
 def prepare_input_data(features_train_data, target_train_data, features_test_data, target_test, len_forecast, task):
     train_input = InputData(idx=np.arange(0, len(features_train_data)), features=features_train_data,
                             target=target_train_data, task=task, data_type=DataTypesEnum.ts)
@@ -84,15 +96,7 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     new_predicted = np.ravel(np.array(new_predicted))
     test_data = np.ravel(test_data)
 
-    mse_before = mean_squared_error(test_data, old_predicted, squared=False)
-    mae_before = mean_absolute_error(test_data, old_predicted)
-    print(f'RMSE before tuning - {mse_before:.4f}')
-    print(f'MAE before tuning - {mae_before:.4f}\n')
-
-    mse_after = mean_squared_error(test_data, new_predicted, squared=False)
-    mae_after = mean_absolute_error(test_data, new_predicted)
-    print(f'RMSE after tuning - {mse_after:.4f}')
-    print(f'MAE after tuning - {mae_after:.4f}\n')
+    count_errors(test_data, old_predicted, new_predicted)
 
     start_point = len(time_series) - len_forecast * 2
     comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start=0)
