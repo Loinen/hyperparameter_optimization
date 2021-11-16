@@ -4,6 +4,7 @@ import pandas as pd
 import warnings
 import timeit
 import seaborn as sns
+from datetime import datetime
 
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
@@ -27,14 +28,19 @@ def plot_series(df):
     plt.show()
 
 
-def comparsion_plot(col_name, ts, old_predicted, new_predicted, train_len, start=0):
+def comparsion_plot(col_name, ts, old_predicted, new_predicted, train_len, start=0, title="Comparsion plot"):
+    now_dt = datetime.now()
+    now = now_dt.strftime("%d_%m_%Y_%H-%M-%S")
+
     plt.plot(range(start, len(ts)), ts[start:], label='Actual time series')
     plt.plot(range(train_len, len(ts)), old_predicted, label='Forecast before tuning', linestyle='--', color='c')
     plt.plot(range(train_len, len(ts)), new_predicted, label='Forecast after tuning', color='g')
+    plt.title(title)
     plt.ylabel(col_name)
     plt.xlabel("N")
     plt.legend()
     plt.grid()
+    plt.savefig('results/{title}_{now}'.format(title=title, now=now))
     plt.show()
 
 
@@ -48,6 +54,8 @@ def count_errors(test_data, old_predicted, new_predicted):
     mae_after = mean_absolute_error(test_data, new_predicted)
     print(f'RMSE after tuning - {mse_after:.4f}')
     print(f'MAE after tuning - {mae_after:.4f}\n')
+
+    return round(mse_before, 2), round(mae_before), round(mse_after), round(mae_after)
 
 
 def prepare_input_data(features_train_data, target_train_data, features_test_data, target_test, len_forecast, task):
@@ -162,6 +170,7 @@ def interpolate(df):
 
 if __name__ == "__main__":
     data = pd.read_excel("kaggle/well_log.xlsx", sheet_name=0)
+
     # убираем лишние столбцы
     data.drop(columns=['SXO', 'Dtsyn', 'Vpsyn', 'sw new', 'sw new%', 'PHI2', 'ΔVp (m/s)'], inplace=True)
     print(data)
