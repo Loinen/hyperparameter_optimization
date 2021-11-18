@@ -16,9 +16,6 @@ from fedot.core.repository.dataset_types import DataTypesEnum
 from fedot.core.repository.tasks import Task, TaskTypesEnum, TsForecastingParams
 from fedot.core.data.multi_modal import MultiModalData
 
-# Игнорирование возникающих предупреждений.
-warnings.filterwarnings('ignore')
-
 
 def plot_series(df):
     df.plot(subplots=True, figsize=(15, 10))
@@ -47,15 +44,15 @@ def comparsion_plot(col_name, ts, old_predicted, new_predicted, train_len, start
 def count_errors(test_data, old_predicted, new_predicted):
     mse_before = mean_squared_error(test_data, old_predicted, squared=False)
     mae_before = mean_absolute_error(test_data, old_predicted)
-    print(f'RMSE before tuning - {mse_before:.4f}')
+    print(f'MSE before tuning - {mse_before:.4f}')
     print(f'MAE before tuning - {mae_before:.4f}\n')
 
     mse_after = mean_squared_error(test_data, new_predicted, squared=False)
     mae_after = mean_absolute_error(test_data, new_predicted)
-    print(f'RMSE after tuning - {mse_after:.4f}')
+    print(f'MSE after tuning - {mse_after:.4f}')
     print(f'MAE after tuning - {mae_after:.4f}\n')
 
-    return round(mse_before, 2), round(mae_before), round(mse_after), round(mae_after)
+    return round(mse_before, 4), round(mae_before, 4), round(mse_after, 4), round(mae_after, 4)
 
 
 def prepare_input_data(features_train_data, target_train_data, features_test_data, target_test, len_forecast, task):

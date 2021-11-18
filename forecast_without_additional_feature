@@ -4,8 +4,9 @@ import pandas as pd
 import timeit
 import seaborn as sns
 import datetime
+import random
 
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_squared_error
 
 from fedot.core.data.data import InputData
 from fedot.core.pipelines.node import PrimaryNode, SecondaryNode
@@ -14,14 +15,19 @@ from fedot.core.pipelines.tuning.unified import PipelineTuner
 from fedot.core.repository.dataset_types import DataTypesEnum
 from fedot.core.repository.tasks import Task, TaskTypesEnum, TsForecastingParams
 
-# Evolutionary algorithm classes
-from fedot.core.optimisers.gp_comp.operators.mutation import MutationTypesEnum
-from fedot.core.composer.gp_composer.specific_operators import parameter_change_mutation
-from fedot.core.composer.gp_composer.gp_composer import GPComposerBuilder, GPComposerRequirements
-from fedot.core.optimisers.gp_comp.gp_optimiser import GPGraphOptimiserParameters
-from fedot.core.repository.quality_metrics_repository import MetricsRepository, RegressionMetricsEnum
-
 from main import plot_series, interpolate, comparsion_plot, count_errors
+
+
+def loss_plot(data_array, title):
+    now_dt = datetime.datetime.now()
+    now = now_dt.strftime("%d_%m_%Y_%H-%M-%S")
+    print("loss: ", data_array)
+    plt.plot(data_array)
+    plt.title('Loss history')
+    plt.ylabel('mse')
+    plt.xlabel('iteration')
+    plt.savefig('results/{title}_{now}'.format(title=title, now=now))
+    plt.show()
 
 
 def prepare_input_data(len_forecast, train_data_features, train_data_target, test_data_features):
@@ -49,16 +55,23 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     train_input, predict_input, task = prepare_input_data(len_forecast, train_data_features=train_data,
                                                           train_data_target=train_data,
                                                           test_data_features=train_data)
-    init_pipeline = get_complex_pipeline()
+
+    init_pipeline = fourth_level_pipe()
     init_pipeline.show()
     print("init pipe")
     init_pipeline.print_structure()
 
-    old_predicted, new_predicted = make_forecast_with_tuning(init_pipeline, train_input, predict_input, task, cv_folds)
+    old_predicted, new_predicted, tune_time = \
+        make_forecast_with_tuning(init_pipeline, train_input, predict_input, task, cv_folds)
 
     old_predicted = np.ravel(np.array(old_predicted))
     new_predicted = np.ravel(np.array(new_predicted))
     test_data = np.ravel(test_data)
+
+    # plot losses
+    outfile = "C:/Users/User/PycharmProjects/hyperparameter_optimization/results/loss_hyperopt/losses.npy"
+    test = np.load(outfile)
+    loss_plot(test, "pipeline_tuner")
 
     mse_init, mae_init, mse_tuning, mae_tuning = count_errors(test_data, old_predicted, new_predicted)
 
@@ -67,98 +80,58 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
                     "Init pipeline vs tuned (green) pipeline")
     comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start_point,
                     "Init pipeline vs tuned (green) pipeline")
+    # random search
+    start_time = timeit.default_timer()
+    results_rs, history = baseline(train_input)
+    amount_of_seconds = timeit.default_timer() - start_time
+    print(f'\nIt takes {amount_of_seconds:.2f} seconds to tune RS pipeline\n')
+    loss_plot(history, "RS")
 
-    # try to use composer
-    # In FEDOT, there are several mutation operators, namely:
+    rs_pipeline = fourth_level_pipe(results_rs)
+    rs_pipeline.print_structure()
 
-    # simple - this type of mutation is passed over all nodes of the tree started from the root node and replace
-    # operations in the nodes with new ones;
+    rs_pipeline.fit_from_scratch(train_input)
+    predicted_values = rs_pipeline.predict(predict_input)
+    rs_predicted_values = predicted_values.predict
+    rs_predicted_values = np.ravel(np.array(rs_predicted_values))
 
-    # growth - this mutation selects a random node in a tree, generates new subtree,
-    # and replaces the selected node's subtree;
+    mse_init, mae_init, mse_rs, mae_rs = count_errors(test_data, old_predicted, rs_predicted_values)
 
-    # local_growth - as "growth", but maximal depth of new subtree equals depth of tree located in;
-
-    # reduce - selects a random node in a tree, then removes its subtree. If the current arity of the node's parent
-    # is more than the specified minimal arity, then the selected node is also removed;
-
-    # Specific mutation:
-    # parameter_change_mutation - this type of mutation is passed over all nodes and changes hyperparameters of the
-    # operations;
-
-    mutation_types = [parameter_change_mutation]
-    optimiser_parameters = GPGraphOptimiserParameters(mutation_types=mutation_types)
-    primary_operations = ['sparse_lagged', 'lagged', 'smoothing', 'scaling',
-                          'gaussian_filter', 'ar', 'poly_features', 'normalization', 'pca']
-    secondary_operations = ['sparse_lagged', 'lagged', 'linear', 'ridge', 'lasso', 'knnreg', 'dtreg', 'linear',
-                            'scaling', 'ransac_lin_reg', 'ransac_non_lin_reg', 'rfe_lin_reg', 'rfe_non_lin_reg']
-
-    composer_requirements = GPComposerRequirements(
-        primary=primary_operations,
-        secondary=secondary_operations,
-        max_arity=4,
-        max_depth=8,
-        pop_size=10,
-        num_of_generations=20, #iterations
-        crossover_prob=0.8,
-        mutation_prob=0.8,
-        timeout=datetime.timedelta(minutes=1), # 5
-        cv_folds=2)
-
-    metric_function = MetricsRepository().metric_by_id(RegressionMetricsEnum.MAE)
-    builder = GPComposerBuilder(task=task). \
-        with_optimiser_parameters(optimiser_parameters). \
-        with_requirements(composer_requirements). \
-        with_metrics(metric_function).with_initial_pipeline(init_pipeline)
-    composer = builder.build()
-
-    obtained_pipeline = composer.compose_pipeline(data=train_input, is_visualise=True)
-    obtained_pipeline.fit(train_input)
-
-    # history = obtained_pipeline.history()
-    #
-    # from fedot.core.visualisation.opt_viz import PipelineEvolutionVisualiser
-    #
-    # visualiser = PipelineEvolutionVisualiser()
-    # visualiser.visualise_history(history)
-    # plt.show()
-
-    print("composer pipe")
-    obtained_pipeline.print_structure()
-
-    obtained_output = obtained_pipeline.predict(predict_input)
-    obtained_forecast = np.ravel(np.array(obtained_output.predict))
-
-    # Мы будем сравнивать ориг пайплайн с новым, затем можно сравнить результаты composer и PipelineTuner
-    mse_init, mae_init, mse_composer, mae_composer = count_errors(test_data, old_predicted, obtained_forecast)
-
-    comparsion_plot(col_name, ts, old_predicted, obtained_forecast, len(train_data), start_point,
-                    "Init pipeline vs composer (green) pipeline")
-    comparsion_plot(col_name, ts, new_predicted, obtained_forecast, len(train_data), start_point,
-                    "Tuned pipeline vs composer (green) pipeline")
+    start_point = len(time_series) - len_forecast * 2
+    comparsion_plot(col_name, ts, old_predicted, rs_predicted_values, len(train_data), start_point,
+                    "Init pipeline vs RS (green) pipeline")
+    comparsion_plot(col_name, ts, new_predicted, rs_predicted_values, len(train_data), start_point,
+                    "Tuned pipeline vs RS (green) pipeline")
 
     now_dt = datetime.datetime.now()
     now = now_dt.strftime("%d_%m_%Y_%H-%M-%S")
-    errors_str = ' '.join(str(x) for x in [mse_init, mae_init, mse_tuning, mae_tuning, mse_composer, mae_composer])
+    errors_str = ' '.join(str(x) for x in [mse_init, mae_init, mse_tuning, mae_tuning])
+    errors_rs = ' '.join(str(x) for x in [mse_rs, mae_rs])
 
     with open('results/errors/errors_{now}.txt'.format(now=now), 'w') as f:
-        f.write('mse_init, mae_init, mse_tuning, mae_tuning, mse_composer, mae_composer\n' + errors_str)
+        f.write('mse_init, mae_init, mse_tuning, mae_tuning  \n' + errors_str + '\ntune_time  \n' + str(tune_time) +
+                'mse_rs, mae_rs   \n' + errors_rs + '\nrs_tune_time   \n' + str(amount_of_seconds))
+
+    res = [mse_init, mae_init, mse_tuning, mae_tuning, mse_rs, mae_rs, tune_time, amount_of_seconds]
+    res_df = pd.DataFrame([res], columns=['mse_init', 'mae_init', 'mse_tuning', 'mae_tuning', 'mse_rs', 'mae_rs',
+                                          'tune_time', 'rs_time'])
+    print(res_df)
+    res_df.to_csv('results/errors/res_df_{now}.csv'.format(now=now), index=False)
+    return res_df
 
 
 def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_folds):
-    start_time = timeit.default_timer()
     pipeline.fit_from_scratch(train_input)
-    amount_of_seconds = timeit.default_timer() - start_time
-
-    print(f'\nIt takes {amount_of_seconds:.2f} seconds to train pipeline\n')
-
-    # Predict orig pipe
     predicted_values = pipeline.predict(predict_input)
     old_predicted_values = predicted_values.predict
 
-    pipeline_tuner = PipelineTuner(pipeline, task, iterations=20, timeout=datetime.timedelta(minutes=1))
+    pipeline_tuner = PipelineTuner(pipeline, task, iterations=10, timeout=datetime.timedelta(minutes=3))
+
+    start_time = timeit.default_timer()
     pipeline = pipeline_tuner.tune_pipeline(input_data=train_input, loss_function=mean_squared_error,
                                             loss_params={'squared': False}, cv_folds=cv_folds, validation_blocks=3)
+    amount_of_seconds = timeit.default_timer() - start_time
+    print(f'\nIt takes {amount_of_seconds:.2f} seconds to tune pipeline\n')
 
     pipeline.fit_from_scratch(train_input)  # Fit pipeline on the entire train data
     print("PipelineTuner pipe")
@@ -167,10 +140,10 @@ def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_fol
     predicted_values = pipeline.predict(predict_input)
     new_predicted_values = predicted_values.predict
 
-    return old_predicted_values, new_predicted_values
+    return old_predicted_values, new_predicted_values, amount_of_seconds
 
 
-def get_complex_pipeline():
+def fourth_level_pipe(start_params=None):
     """
     Pipeline looking like this
     smoothing - lagged - ridge \
@@ -182,6 +155,9 @@ def get_complex_pipeline():
 
     # First level
     node_smoothing = PrimaryNode('smoothing')
+    if start_params is not None:
+        print('start params:', start_params)
+        node_smoothing.custom_params = {'window_size': start_params['window_size_smooth']}
 
     # Second level
     node_lagged_1 = SecondaryNode('lagged', nodes_from=[node_smoothing])
@@ -189,19 +165,88 @@ def get_complex_pipeline():
     node_lagged_2 = PrimaryNode('lagged')
     node_lagged_2.custom_params = {'window_size': 50}
 
+    if start_params is not None:
+        node_lagged_1.custom_params = {'window_size': start_params['window_size']}
+        node_lagged_2.custom_params = {'window_size': start_params['window_size2']}
+
     # Third level
     node_ridge_1 = SecondaryNode('ridge', nodes_from=[node_lagged_1])
     node_ridge_2 = SecondaryNode('ridge', nodes_from=[node_lagged_2])
 
+    if start_params is not None:
+        node_ridge_1.custom_params = {'alpha': start_params['alpha']}
+        node_ridge_2.custom_params = {'alpha': start_params['alpha2']}
+
     # Fourth level - root node
     node_final = SecondaryNode('ridge', nodes_from=[node_ridge_1, node_ridge_2])
+    if start_params is not None:
+        node_final.custom_params = {'alpha': start_params['alpha3']}
+
+    pipeline = Pipeline(node_final)
+    return pipeline
+
+
+def third_level_pipe():
+    """
+    smoothing - lagged   \
+                          \
+                            ridge -> final forecast
+                          /
+                lagged   /
+    """
+
+    # First level
+    node_smoothing = PrimaryNode('smoothing')
+
+    # Second level
+    node_lagged_1 = SecondaryNode('lagged', nodes_from=[node_smoothing])
+    node_lagged_1.custom_params = {'window_size': 300}  # 300 и 50 - результаты по прошлым запускам
+    node_lagged_2 = PrimaryNode('lagged')
+    node_lagged_2.custom_params = {'window_size': 50}
+
+    # Third level - root node
+    node_final = SecondaryNode('ridge', nodes_from=[node_lagged_1, node_lagged_2])
     pipeline = Pipeline(node_final)
 
     return pipeline
 
 
+def baseline(train_data):
+    min_mse = 9999
+    num_iters = 10
+    real_data = np.ravel(train_data.target)
+    best_params = None
+    mse_array = []
+
+    for iteration in range(num_iters):
+        alpha_range = np.arange(0.01, 10, 0.01)
+        lagged = np.arange(5, 500, 1)
+        smooth = np.arange(2, 20, 1)
+        params = dict(alpha=random.choice(alpha_range), alpha2=random.choice(alpha_range),
+                      window_size=random.choice(lagged), window_size_smooth=random.choice(smooth),
+                      alpha3=random.choice(alpha_range), window_size2=random.choice(lagged))
+
+        pipeline = fourth_level_pipe(params)
+        pipeline.fit_from_scratch(train_data)
+        predicted_values = pipeline.predict(train_data)
+        predicted_values = predicted_values.predict
+        predicted_values = np.ravel(np.array(predicted_values))
+        mse = mean_squared_error(real_data[len(real_data) - 500:], predicted_values, squared=False)
+        mse_array.append(mse)
+
+        if mse < min_mse:
+            min_mse = mse
+            best_params = params
+
+    print("best params is: ", best_params)
+    print("min_mse is: ", min_mse)
+
+    return best_params, mse_array
+
+
 if __name__ == "__main__":
     data = pd.read_excel("kaggle/well_log.xlsx", sheet_name=0, nrows=3000)
+    pd.set_option('display.max_columns', 50)
     # убираем лишние столбцы
     data.drop(columns=['SXO', 'Dtsyn', 'Vpsyn', 'sw new', 'sw new%', 'PHI2', 'ΔVp (m/s)', 'ΔVp'], inplace=True)
     print(data)
@@ -223,6 +268,13 @@ if __name__ == "__main__":
                     'Vpreal': 'VP'}
     data.rename(columns=dict_columns, inplace=True)
 
+    iterations = 10
+    resulting_df = pd.DataFrame()
+
     for col in ['DT']:  # list(data.columns) 'SW', 'CGR', 'NPHI', 'FN', 'PHIE'
-        ts = np.array(data[col])  # composer and tuning randomly can be different, but not always...
-        run_experiment_with_tuning(ts, col, len_forecast=500, cv_folds=2)
+        ts = np.array(data[col])
+        for i in range(iterations):
+            temp_result = run_experiment_with_tuning(ts, col, len_forecast=500, cv_folds=2)
+            resulting_df = resulting_df.append(temp_result, ignore_index=True)
+        print(resulting_df)
+        print(resulting_df.describe())
