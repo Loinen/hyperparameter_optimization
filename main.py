@@ -25,7 +25,8 @@ def plot_series(df):
     plt.show()
 
 
-def comparsion_plot(col_name, ts, old_predicted, new_predicted, train_len, start=0, title="Comparsion plot"):
+def comparsion_plot(col_name, ts, old_predicted, new_predicted, train_len, start=0, path="results",
+                    title="Comparsion plot"):
     now_dt = datetime.now()
     now = now_dt.strftime("%d_%m_%Y_%H-%M-%S")
 
@@ -37,7 +38,7 @@ def comparsion_plot(col_name, ts, old_predicted, new_predicted, train_len, start
     plt.xlabel("N")
     plt.legend()
     plt.grid()
-    plt.savefig('results/{title}_{now}'.format(title=title, now=now))
+    plt.savefig('{path}/{title}_{now}'.format(path=path, title=title, now=now))
     plt.show()
 
 
@@ -52,7 +53,7 @@ def count_errors(test_data, old_predicted, new_predicted):
     print(f'MSE after tuning - {mse_after:.4f}')
     print(f'MAE after tuning - {mae_after:.4f}\n')
 
-    return round(mse_before, 4), round(mae_before, 4), round(mse_after, 4), round(mae_after, 4)
+    return round(mse_before, 2), round(mae_before, 2), round(mse_after, 2), round(mae_after, 2)
 
 
 def prepare_input_data(features_train_data, target_train_data, features_test_data, target_test, len_forecast, task):
