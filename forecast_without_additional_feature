@@ -16,19 +16,7 @@ from fedot.core.pipelines.tuning.unified import PipelineTuner
 from fedot.core.repository.dataset_types import DataTypesEnum
 from fedot.core.repository.tasks import Task, TaskTypesEnum, TsForecastingParams
 
-from main import plot_series, interpolate, comparsion_plot, count_errors
-
-
-def loss_plot(data_array, title, path="results"):
-    now_dt = datetime.datetime.now()
-    now = now_dt.strftime("%d_%m_%Y_%H-%M-%S")
-    print("loss: ", data_array)
-    plt.plot(data_array)
-    plt.title('Loss history')
-    plt.ylabel('mse')
-    plt.xlabel('iteration')
-    plt.savefig('{path}/{title}_{now}'.format(path=path, title=title, now=now))
-    plt.show()
+from main import plot_series, interpolate, comparsion_plot, count_errors, loss_plot
 
 
 def prepare_input_data(len_forecast, train_data_features, train_data_target, test_data_features):
@@ -77,25 +65,21 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     # plot losses
     outfile = "C:/Users/User/PycharmProjects/hyperparameter_optimization/results/loss_hyperopt/losses.npy"
     test = np.load(outfile)
-    loss_path = '{start_path}/loss_plots'.format(start_path=start_path)
-    pathlib.Path(loss_path).mkdir(parents=True, exist_ok=True)
-    loss_plot(test, "pipeline_tuner", loss_path)
+    loss_plot(test, "loss_pipeline_tuner", start_path)
 
     mse_init, mae_init, mse_tuning, mae_tuning = count_errors(test_data, old_predicted, new_predicted)
 
     start_point = len(time_series) - len_forecast * 2
-    comparsion_path = '{start_path}/comparsion_plots'.format(start_path=start_path)
-    pathlib.Path(comparsion_path).mkdir(parents=True, exist_ok=True)
-    comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), 0, comparsion_path,
+    comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), 0, start_path,
                     "Init pipeline vs tuned (green) pipeline start=0")
-    comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start_point, comparsion_path,
+    comparsion_plot(col_name, ts, old_predicted, new_predicted, len(train_data), start_point, start_path,
                     "Init pipeline vs tuned (green) pipeline")
     # random search
     start_time = timeit.default_timer()
     results_rs, history = baseline(train_input)
     amount_of_seconds = timeit.default_timer() - start_time
     print(f'\nIt takes {amount_of_seconds:.2f} seconds to tune RS pipeline\n')
-    loss_plot(history, "RS", loss_path)
+    loss_plot(history, "loss_RS", start_path)
 
     # get rs pipe and save rs pipe params
     rs_pipeline = fourth_level_pipe(results_rs)
@@ -112,9 +96,9 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
 
     mse_init, mae_init, mse_rs, mae_rs = count_errors(test_data, old_predicted, rs_predicted_values)
     start_point = len(time_series) - len_forecast * 2
-    comparsion_plot(col_name, ts, old_predicted, rs_predicted_values, len(train_data), start_point, comparsion_path,
+    comparsion_plot(col_name, ts, old_predicted, rs_predicted_values, len(train_data), start_point, start_path,
                     "Init pipeline vs RS (green) pipeline")
-    comparsion_plot(col_name, ts, new_predicted, rs_predicted_values, len(train_data), start_point, comparsion_path,
+    comparsion_plot(col_name, ts, new_predicted, rs_predicted_values, len(train_data), start_point, start_path,
                     "Tuned pipeline vs RS (green) pipeline")
 
     # create files with resulting metrics and params
@@ -122,8 +106,6 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     now = now_date.strftime("%d_%m_%Y_%H-%M-%S")
     errors_str = ' '.join(str(x) for x in [mse_init, mae_init, mse_tuning, mae_tuning])
     errors_rs = ' '.join(str(x) for x in [mse_rs, mae_rs])
-    errors_path = '{start_path}/errors'.format(start_path=start_path)
-    pathlib.Path(errors_path).mkdir(parents=True, exist_ok=True)
 
     # params for tuned pipeline
     tuned_params = 'params: '
@@ -131,7 +113,7 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
         tuned_params += str(f"\n{node.operation.operation_type} - {node.custom_params}")
     print('tuned_params', tuned_params)
 
-    with open('{errors_path}/errors_{now}.txt'.format(errors_path=errors_path, now=now), 'w') as f:
+    with open('{errors_path}/errors_{now}.txt'.format(errors_path=start_path, now=now), 'w') as f:
         f.write('mse_init, mae_init, mse_tuning, mae_tuning \n' + errors_str + '\ntune_time \n' + str(tune_time) +
                 '\n mse_rs, mae_rs \n' + errors_rs + '\nrs_tune_time \n' + str(amount_of_seconds) +
                 '\n\nrs_best_params \n' + str(rs_params) + '\n\ntuned_best_params \n' + str(tuned_params))
@@ -140,7 +122,7 @@ def run_experiment_with_tuning(time_series, col_name, len_forecast=250, cv_folds
     res_df = pd.DataFrame([res], columns=['mse_init', 'mae_init', 'mse_tuning', 'mae_tuning', 'mse_rs', 'mae_rs',
                                           'tune_time', 'rs_time'])
     print(res_df)
-    res_df.to_excel('{errors_path}/res_df_{now}.xlsx'.format(errors_path=errors_path, now=now), index=False)
+    res_df.to_excel('{errors_path}/errors_xlsx_{now}.xlsx'.format(errors_path=start_path, now=now), index=False)
     return res_df
 
 
@@ -149,7 +131,7 @@ def make_forecast_with_tuning(pipeline, train_input, predict_input, task, cv_fol
     predicted_values = pipeline.predict(predict_input)
     old_predicted_values = predicted_values.predict
 
-    pipeline_tuner = PipelineTuner(pipeline, task, iterations=10, timeout=datetime.timedelta(minutes=3))
+    pipeline_tuner = PipelineTuner(pipeline, task, iterations=20, timeout=datetime.timedelta(minutes=5))
 
     start_time = timeit.default_timer()
     pipeline = pipeline_tuner.tune_pipeline(input_data=train_input, loss_function=mean_squared_error,
@@ -238,7 +220,7 @@ def third_level_pipe():
 
 def baseline(train_data):
     min_mse = 9999
-    num_iters = 10
+    num_iters = 20
     real_data = np.ravel(train_data.target)
     best_params = None
     mse_array = []
@@ -294,7 +276,6 @@ if __name__ == "__main__":
     data.rename(columns=dict_columns, inplace=True)
 
     iterations = 10
-    resulting_df = pd.DataFrame()
 
     now_date = datetime.datetime.now()
     now = now_date.strftime("%d_%m_%Y_%H-%M-%S")
@@ -307,7 +288,8 @@ if __name__ == "__main__":
     # outfile = "C:/Users/User/PycharmProjects/hyperparameter_optimization/results/loss_hyperopt/losses.npy"
     # np.save(outfile, trials.losses())
 
-    for col in ['CGR', 'NPHI', 'FN', 'PHIE']:  # list(data.columns) 'DT', 'SW', 'CGR', 'NPHI', 'FN', 'PHIE'
+    for col in ['DT', 'SW', 'CGR', 'NPHI', 'PHIE']:  # list(data.columns) 'DT', 'SW', 'CGR', 'NPHI', 'FN', 'PHIE'
+        resulting_df = pd.DataFrame()
         ts = np.array(data[col])
         for i in range(iterations):
             temp_result = run_experiment_with_tuning(ts, col, len_forecast=500, cv_folds=2)
