@@ -70,6 +70,17 @@ def count_errors(test_data, old_predicted, new_predicted):
     return round(mse_before, 4), round(mae_before, 4), round(mse_after, 4), round(mae_after, 4)
 
 
+def prepare_input_data(features_train_data, target_train_data, features_test_data, target_test, len_forecast, task):
+    train_input = InputData(idx=np.arange(0, len(features_train_data)), features=features_train_data,
+                            target=target_train_data, task=task, data_type=DataTypesEnum.ts)
+    start_forecast = len(features_train_data)
+    end_forecast = start_forecast + len_forecast
+    predict_input = InputData(idx=np.arange(start_forecast, end_forecast), features=features_test_data,
+                              target=target_test, task=task, data_type=DataTypesEnum.ts)
+
+    return train_input, predict_input
+
+
 def run_experiment_with_tuning(time_series, col_name, exog_variable, len_forecast=250, cv_folds=None):
     task = Task(TaskTypesEnum.ts_forecasting, TsForecastingParams(len_forecast))
 
@@ -85,6 +96,14 @@ def run_experiment_with_tuning(time_series, col_name, exog_variable, len_forecas
     predict_input_exog = InputData(idx=np.arange(len(exog_variable)), features=exog_variable, target=time_series,
                                    task=task, data_type=DataTypesEnum.ts)
     train_input_exog, _ = train_test_data_setup(predict_input_exog)
+    # train_data = time_series[:-len_forecast]
+    # test_data = time_series[-len_forecast:]
+    # exog_train = exog_variable[:-len_forecast]
+    # exog_test = exog_variable[-len_forecast:]
+    # train_lagged, predict_lagged = prepare_input_data(train_data, train_data, train_data, test_data, len_forecast, task)
+    # train_exog, predict_exog = prepare_input_data(exog_train, train_data, exog_test, test_data, len_forecast, task)
+    # train_dataset = MultiModalData({'data_source_ts/1': train_lagged, 'exog_ts': train_exog})
+    # predict_dataset = MultiModalData({'data_source_ts/1': predict_lagged, 'exog_ts': predict_exog})
 
     pipeline = get_complex_pipeline()
     pipeline.show()
@@ -183,8 +202,8 @@ def make_forecast_with_tuning(orig_pipeline, train_input, predict_input, task, c
 
     start_time = timeit.default_timer()
     tuned_pipeline = pipeline_tuner.tune_pipeline(input_data=train_input, loss_function=mean_squared_error,
-                                                  loss_params={'squared': False}, cv_folds=cv_folds,
-                                                  validation_blocks=3)
+                                                  loss_params={'squared': False}, cv_folds=None,
+                                                  validation_blocks=None)  # кросс-валидация не работает для multi_modal
     amount_of_seconds = timeit.default_timer() - start_time
     print(f'\nIt takes {amount_of_seconds:.2f} seconds to tune pipeline\n')
 
@@ -232,7 +251,7 @@ def get_complex_pipeline(start_params=None):
         node_ridge_2.custom_params = {'alpha': start_params['alpha2']}
 
     # Fifth level - root node
-    node_final = SecondaryNode('ridge', nodes_from=[node_ridge_1, node_ridge_2, node_exog])
+    node_final = SecondaryNode('ridge', nodes_from=[node_ridge_1, node_exog, node_ridge_2])
     if start_params is not None:
         node_final.custom_params = {'alpha': start_params['alpha3']}
 
@@ -360,10 +379,14 @@ if __name__ == "__main__":
     # outfile = "C:/Users/User/PycharmProjects/hyperparameter_optimization/results/loss_hyperopt/losses.npy"
     # np.save(outfile, trials.losses())
 
-    for col in ['SW', 'CGR', 'NPHI', 'PHIE']:  #['DT', 'SW', 'CGR', 'NPHI', 'PHIE']
+    for col in ['NPHI', 'DT']:  # ['DT', 'SW', 'CGR', 'NPHI', 'PHIE']
+        # 'NPHI', 'DT' - RHOB          -
+        # 'SW' - 'PHIE'                -
+        # 'CGR' - SGR                  -
+        # 'PHIE' - 'SW'                -
         resulting_df = pd.DataFrame()
         ts = np.array(data[col])
-        exog_ts = np.array(data['SGR'])
+        exog_ts = np.array(data['RHOB'])
         for i in range(iterations):
             temp_result = run_experiment_with_tuning(ts, col, exog_ts, len_forecast=500, cv_folds=2)
             resulting_df = resulting_df.append(temp_result, ignore_index=True)
@@ -375,4 +398,3 @@ if __name__ == "__main__":
         resulting_df.describe().to_excel(
             '{path}/{col}_err_{now}_for_{i}_iters_describe.xlsx'.format(now=now, i=iterations, col=col,
                                                                         path=result_errors_path), index=False)
-
